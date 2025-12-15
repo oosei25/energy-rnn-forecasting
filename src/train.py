@@ -60,13 +60,13 @@ def main(config_path: str):
         df = impute_median_ffill_bfill(df, all_cols)
         y_raw = df[target].to_numpy(dtype=np.float64)  # ORIGINAL SCALE for baselines
 
-        # --- calendar features ---
+        # calendar features
         extra_feats = []
         if cfg["preprocess"].get("calendar_features", False):
             df, cal_cols = add_calendar_features(df, ts_col)
             extra_feats.extend(cal_cols)
 
-        # --- lag features of target ---
+        # lag features of target
         lags = cfg["preprocess"].get("lags", [])
         if lags:
             df, lag_cols = add_lag_features(df, target, lags)
@@ -78,16 +78,36 @@ def main(config_path: str):
 
         # update y_raw too (since we dropped initial rows)
         y_raw = df[target].to_numpy(dtype=np.float64)
+
+        # Residual target
+        target_used = target
+        mode = cfg["preprocess"].get("target_mode", "absolute")
+        residual_lag = int(cfg["preprocess"].get("residual_lag", 168))
+
+        if mode == "residual_over_lag":
+            lag_col = f"lag_{residual_lag}"
+            if lag_col not in df.columns:
+                raise ValueError(f"Residual mode requires feature '{lag_col}' to exist. Ensure preprocess.lags includes {residual_lag}.")
+            df["_target_residual"] = df[target] - df[lag_col]
+            target_used = "_target_residual"
     else:
         raise ValueError("Unknown impute method in config.")
 
     T = len(df)
     tr, va, te = time_split_indices(T, cfg["split"]["train"], cfg["split"]["val"])
 
-    X_all, y_all, xscaler, yscaler = make_arrays_and_scalers(df, features, target, tr)
+    X_all, y_all, xscaler, yscaler = make_arrays_and_scalers(df, features, target_used, tr)
 
     lookback = cfg["window"]["lookback"]
     horizon = cfg["window"]["horizon"]
+
+    val_base = None
+    test_base = None
+
+    if mode == "residual_over_lag":
+        # baseline for reconstruction is lag-168 seasonal naive prediction windows
+        _, val_base = seasonal_naive_windows(y_raw, va.start, va.stop, lookback, horizon, season=residual_lag)
+        _, test_base = seasonal_naive_windows(y_raw, te.start, te.stop, lookback, horizon, season=residual_lag)
 
     # build per-split datasets *after* scaling, but slices must still be time-safe
     X_tr, y_tr = X_all[tr], y_all[tr]
@@ -148,6 +168,10 @@ def main(config_path: str):
     best_val = float("inf") if mode == "min" else -float("inf")
     best_epoch = -1
     best_metrics: dict[str, float] | None = None
+
+    patience = int(cfg["train"].get("patience", 0))
+    min_delta = float(cfg["train"].get("min_delta", 0.0))
+    bad_epochs = 0
     for epoch in range(1, cfg["train"]["epochs"] + 1):
         model.train()
         total = 0.0
@@ -165,7 +189,7 @@ def main(config_path: str):
             count += xb.size(0)
 
         train_mse = total / max(count, 1)
-        val_metrics = evaluate(model, val_dl, device, yscaler=yscaler)
+        val_metrics = evaluate(model, val_dl, device, yscaler=yscaler, baseline_windows=val_base)
 
         if metric not in val_metrics:
             raise KeyError(
@@ -173,7 +197,10 @@ def main(config_path: str):
             )
 
         val_score = val_metrics[metric]
-        better = (val_score < best_val) if mode == "min" else (val_score > best_val)
+        if mode == "min":
+            better = val_score < (best_val - min_delta)
+        else:
+            better = val_score > (best_val + min_delta)
 
         extras = " | ".join(
             f"val_{k}={val_metrics[k]:.2f}"
@@ -191,6 +218,12 @@ def main(config_path: str):
             best_epoch = epoch
             best_metrics = val_metrics
             torch.save(model.state_dict(), best_path)
+            bad_epochs = 0
+        else:
+            bad_epochs += 1
+            if patience > 0 and bad_epochs >= patience:
+                print(f"EARLY STOPPING at epoch {epoch} (no improvement in {patience} epochs; best at {best_epoch})")
+                break
 
     model.load_state_dict(torch.load(best_path, map_location=device))
     assert best_metrics is not None
@@ -266,7 +299,7 @@ def main(config_path: str):
         f"MAE={test_168['MAE']:.2f} | sMAPE={test_168['sMAPE']:.2f}"
     )
 
-    test_metrics = evaluate(model, test_dl, device, yscaler=yscaler)
+    test_metrics = evaluate(model, test_dl, device, yscaler=yscaler, baseline_windows=test_base)
     print(
         f"TEST | RMSE={test_metrics['RMSE']:.2f} | "
         f"MAE={test_metrics['MAE']:.2f} | sMAPE={test_metrics['sMAPE']:.2f}"

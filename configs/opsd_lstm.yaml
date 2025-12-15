@@ -24,6 +24,8 @@ preprocess:
   impute: median_ffill_bfill
   calendar_features: true
   lags: [24, 168]   
+  target_mode: residual_over_lag
+  residual_lag: 168
 
 split:
   train: 0.70
@@ -47,6 +49,8 @@ train:
   weight_decay: 0.0
   seed: 42
   num_workers: 0
+  patience: 5
+  min_delta: 0.0
 
 selection:
   metric: RMSE   # RMSE | MAE | sMAPE
