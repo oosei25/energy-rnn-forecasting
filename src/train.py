@@ -12,6 +12,9 @@ from data.preprocess import (
     impute_median_ffill_bfill,
     time_split_indices,
     make_arrays_and_scalers,
+    add_calendar_features,
+    add_lag_features,
+    drop_initial_rows_for_lags,
 )
 from data.window_dataset import WindowDataset
 from models.lstm import LSTMForecaster
@@ -56,6 +59,25 @@ def main(config_path: str):
     if cfg["preprocess"]["impute"] == "median_ffill_bfill":
         df = impute_median_ffill_bfill(df, all_cols)
         y_raw = df[target].to_numpy(dtype=np.float64)  # ORIGINAL SCALE for baselines
+
+        # --- calendar features ---
+        extra_feats = []
+        if cfg["preprocess"].get("calendar_features", False):
+            df, cal_cols = add_calendar_features(df, ts_col)
+            extra_feats.extend(cal_cols)
+
+        # --- lag features of target ---
+        lags = cfg["preprocess"].get("lags", [])
+        if lags:
+            df, lag_cols = add_lag_features(df, target, lags)
+            extra_feats.extend(lag_cols)
+            df = drop_initial_rows_for_lags(df, lags)
+
+        # keep feature list in sync
+        features = features + extra_feats
+
+        # update y_raw too (since we dropped initial rows)
+        y_raw = df[target].to_numpy(dtype=np.float64)
     else:
         raise ValueError("Unknown impute method in config.")
 

@@ -21,7 +21,9 @@ opsd:
 
 preprocess:
   enforce_hourly_grid: true
-  impute: median_ffill_bfill   
+  impute: median_ffill_bfill
+  calendar_features: true
+  lags: [24, 168]   
 
 split:
   train: 0.70

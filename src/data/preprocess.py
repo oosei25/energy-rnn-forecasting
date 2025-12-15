@@ -49,3 +49,44 @@ def make_arrays_and_scalers(
     y_all = yscaler.transform(y.reshape(-1, 1))[:, 0]
 
     return X_all, y_all, xscaler, yscaler
+
+def add_calendar_features(df: pd.DataFrame, ts_col: str) -> tuple[pd.DataFrame, list[str]]:
+    """
+    Adds cyclical hour-of-day and day-of-week features.
+    Returns (df, new_feature_cols).
+    """
+    out = df.copy()
+    ts = pd.to_datetime(out[ts_col])
+
+    hour = ts.dt.hour.astype(np.float32)
+    dow = ts.dt.dayofweek.astype(np.float32)  # Mon=0..Sun=6
+
+    out["hour_sin"] = np.sin(2.0 * np.pi * hour / 24.0)
+    out["hour_cos"] = np.cos(2.0 * np.pi * hour / 24.0)
+    out["dow_sin"]  = np.sin(2.0 * np.pi * dow / 7.0)
+    out["dow_cos"]  = np.cos(2.0 * np.pi * dow / 7.0)
+
+    return out, ["hour_sin", "hour_cos", "dow_sin", "dow_cos"]
+
+
+def add_lag_features(df: pd.DataFrame, target_col: str, lags: list[int]) -> tuple[pd.DataFrame, list[str]]:
+    """
+    Adds lag features of the TARGET (past-only), e.g. lag_24, lag_168.
+    Returns (df, new_feature_cols).
+    """
+    out = df.copy()
+    new_cols = []
+    for lag in lags:
+        col = f"lag_{lag}"
+        out[col] = out[target_col].shift(lag)
+        new_cols.append(col)
+    return out, new_cols
+
+
+def drop_initial_rows_for_lags(df: pd.DataFrame, lags: list[int]) -> pd.DataFrame:
+    """
+    Drops the first max(lags) rows so lag features are not NaN.
+    """
+    if not lags:
+        return df
+    return df.iloc[max(lags):].reset_index(drop=True)
