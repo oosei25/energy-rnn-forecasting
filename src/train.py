@@ -16,6 +16,8 @@ from data.preprocess import (
 from data.window_dataset import WindowDataset
 from models.lstm import LSTMForecaster
 from models.gru import GRUForecaster
+from baselines import seasonal_naive_windows
+from metrics import mae, rmse, smape
 from evaluate import evaluate
 
 
@@ -53,6 +55,7 @@ def main(config_path: str):
     all_cols = list(dict.fromkeys(features + [target]))
     if cfg["preprocess"]["impute"] == "median_ffill_bfill":
         df = impute_median_ffill_bfill(df, all_cols)
+        y_raw = df[target].to_numpy(dtype=np.float64)  # ORIGINAL SCALE for baselines
     else:
         raise ValueError("Unknown impute method in config.")
 
@@ -143,7 +146,9 @@ def main(config_path: str):
         val_metrics = evaluate(model, val_dl, device, yscaler=yscaler)
 
         if metric not in val_metrics:
-            raise KeyError(f"selection.metric='{metric}' not in val_metrics={list(val_metrics.keys())}")
+            raise KeyError(
+                f"selection.metric='{metric}' not in val_metrics={list(val_metrics.keys())}"
+            )
 
         val_score = val_metrics[metric]
         better = (val_score < best_val) if mode == "min" else (val_score > best_val)
@@ -156,8 +161,7 @@ def main(config_path: str):
 
         print(
             f"epoch {epoch:02d} | train_mse={train_mse:.4f} | "
-            f"val_{metric}={val_score:.2f}"
-            + (f" | {extras}" if extras else "")
+            f"val_{metric}={val_score:.2f}" + (f" | {extras}" if extras else "")
         )
 
         if better:
@@ -168,14 +172,82 @@ def main(config_path: str):
 
     model.load_state_dict(torch.load(best_path, map_location=device))
     assert best_metrics is not None
-    print(
-        f"BEST @ epoch {best_epoch} | val_{metric}={best_val:.2f} | "
-        f"val_RMSE={best_metrics['RMSE']:.2f} | val_sMAPE={best_metrics['sMAPE']:.2f}"
+
+    extras = " | ".join(
+        f"val_{k}={best_metrics[k]:.2f}"
+        for k in ("RMSE", "MAE", "sMAPE")
+        if k != metric
     )
+
+    print(
+        f"BEST @ epoch {best_epoch} | val_{metric}={best_val:.2f}"
+        + (f" | {extras}" if extras else "")
+    )
+
+    # ---- Baselines (original scale) ----
+    lookback = cfg["window"]["lookback"]
+    horizon = cfg["window"]["horizon"]
+
+    # Seasonal naive: yesterday (24h) and last week (168h)
+    val_y24_true, val_y24_pred = seasonal_naive_windows(
+        y_raw, va.start, va.stop, lookback, horizon, season=24
+    )
+    val_y168_true, val_y168_pred = seasonal_naive_windows(
+        y_raw, va.start, va.stop, lookback, horizon, season=168
+    )
+
+    val_24 = {
+        "RMSE": rmse(val_y24_true, val_y24_pred),
+        "MAE": mae(val_y24_true, val_y24_pred),
+        "sMAPE": smape(val_y24_true, val_y24_pred),
+    }
+    val_168 = {
+        "RMSE": rmse(val_y168_true, val_y168_pred),
+        "MAE": mae(val_y168_true, val_y168_pred),
+        "sMAPE": smape(val_y168_true, val_y168_pred),
+    }
+
+    print(
+        f"BASELINE (VAL) | lag24  RMSE={val_24['RMSE']:.2f} | "
+        f"MAE={val_24['MAE']:.2f} | sMAPE={val_24['sMAPE']:.2f}"
+    )
+    print(
+        f"BASELINE (VAL) | lag168 RMSE={val_168['RMSE']:.2f} | "
+        f"MAE={val_168['MAE']:.2f} | sMAPE={val_168['sMAPE']:.2f}"
+    )
+
+    # Test baselines
+    test_y24_true, test_y24_pred = seasonal_naive_windows(
+        y_raw, te.start, te.stop, lookback, horizon, season=24
+    )
+    test_y168_true, test_y168_pred = seasonal_naive_windows(
+        y_raw, te.start, te.stop, lookback, horizon, season=168
+    )
+
+    test_24 = {
+        "RMSE": rmse(test_y24_true, test_y24_pred),
+        "MAE": mae(test_y24_true, test_y24_pred),
+        "sMAPE": smape(test_y24_true, test_y24_pred),
+    }
+    test_168 = {
+        "RMSE": rmse(test_y168_true, test_y168_pred),
+        "MAE": mae(test_y168_true, test_y168_pred),
+        "sMAPE": smape(test_y168_true, test_y168_pred),
+    }
+
+    print(
+        f"BASELINE (TEST)| lag24  RMSE={test_24['RMSE']:.2f} | "
+        f"MAE={test_24['MAE']:.2f} | sMAPE={test_24['sMAPE']:.2f}"
+    )
+    print(
+        f"BASELINE (TEST)| lag168 RMSE={test_168['RMSE']:.2f} | "
+        f"MAE={test_168['MAE']:.2f} | sMAPE={test_168['sMAPE']:.2f}"
+    )
+
     test_metrics = evaluate(model, test_dl, device, yscaler=yscaler)
     print(
-        f"TEST | RMSE={test_metrics['RMSE']:.4f} | "
-        f"MAE={test_metrics['MAE']:.4f} | sMAPE={test_metrics['sMAPE']:.2f}"
+        f"TEST | RMSE={test_metrics['RMSE']:.2f} | "
+        f"MAE={test_metrics['MAE']:.2f} | sMAPE={test_metrics['sMAPE']:.2f}"
     )
 
 
