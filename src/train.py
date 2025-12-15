@@ -148,9 +148,16 @@ def main(config_path: str):
         val_score = val_metrics[metric]
         better = (val_score < best_val) if mode == "min" else (val_score > best_val)
 
+        extras = " | ".join(
+            f"val_{k}={val_metrics[k]:.2f}"
+            for k in ("RMSE", "MAE", "sMAPE")
+            if k != metric
+        )
+
         print(
             f"epoch {epoch:02d} | train_mse={train_mse:.4f} | "
-            f"val_{metric}={val_score:.4f} | val_RMSE={val_metrics['RMSE']:.4f} | val_sMAPE={val_metrics['sMAPE']:.2f}"
+            f"val_{metric}={val_score:.2f}"
+            + (f" | {extras}" if extras else "")
         )
 
         if better:
@@ -162,8 +169,8 @@ def main(config_path: str):
     model.load_state_dict(torch.load(best_path, map_location=device))
     assert best_metrics is not None
     print(
-        f"BEST @ epoch {best_epoch} | val_{metric}={best_val:.4f} | "
-        f"val_RMSE={best_metrics['RMSE']:.4f} | val_sMAPE={best_metrics['sMAPE']:.2f}"
+        f"BEST @ epoch {best_epoch} | val_{metric}={best_val:.2f} | "
+        f"val_RMSE={best_metrics['RMSE']:.2f} | val_sMAPE={best_metrics['sMAPE']:.2f}"
     )
     test_metrics = evaluate(model, test_dl, device, yscaler=yscaler)
     print(
