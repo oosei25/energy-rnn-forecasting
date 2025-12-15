@@ -1,0 +1,20 @@
+cat > .gitignore <<'EOF'
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+
+# OS
+.DS_Store
+
+# Data (keep repo light)
+data/raw/**/time_series.sqlite
+data/raw/**/original_data.zip
+data/processed/
+
+# Training artifacts
+*.pt
+runs/
+logs/
+EOF
