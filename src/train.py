@@ -1,0 +1,181 @@
+from __future__ import annotations
+import os
+import random
+import yaml
+import numpy as np
+import torch
+from torch.utils.data import DataLoader
+
+from data.sqlite_opsd import load_opsd_sqlite
+from data.preprocess import (
+    enforce_hourly_index,
+    impute_median_ffill_bfill,
+    time_split_indices,
+    make_arrays_and_scalers,
+)
+from data.window_dataset import WindowDataset
+from models.lstm import LSTMForecaster
+from models.gru import GRUForecaster
+from evaluate import evaluate
+
+
+def set_seed(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+
+def main(config_path: str):
+    with open(config_path, "r") as f:
+        cfg = yaml.safe_load(f)
+
+    set_seed(cfg["train"]["seed"])
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    opsd = cfg["opsd"]
+    target = opsd["target"]
+    features = opsd["features"]
+    ts_col = opsd["timestamp_col"]
+
+    df = load_opsd_sqlite(
+        sqlite_path=opsd["sqlite_path"],
+        table=opsd["table"],
+        timestamp_col=ts_col,
+        columns=list(dict.fromkeys(features + [target])),
+        start_utc=opsd.get("start_utc"),
+        end_utc=opsd.get("end_utc"),
+    )
+
+    if cfg["preprocess"]["enforce_hourly_grid"]:
+        df = enforce_hourly_index(df, ts_col)
+
+    all_cols = list(dict.fromkeys(features + [target]))
+    if cfg["preprocess"]["impute"] == "median_ffill_bfill":
+        df = impute_median_ffill_bfill(df, all_cols)
+    else:
+        raise ValueError("Unknown impute method in config.")
+
+    T = len(df)
+    tr, va, te = time_split_indices(T, cfg["split"]["train"], cfg["split"]["val"])
+
+    X_all, y_all, xscaler, yscaler = make_arrays_and_scalers(df, features, target, tr)
+
+    lookback = cfg["window"]["lookback"]
+    horizon = cfg["window"]["horizon"]
+
+    # build per-split datasets *after* scaling, but slices must still be time-safe
+    X_tr, y_tr = X_all[tr], y_all[tr]
+    X_va, y_va = X_all[va], y_all[va]
+    X_te, y_te = X_all[te], y_all[te]
+
+    train_ds = WindowDataset(X_tr, y_tr, lookback, horizon)
+    val_ds = WindowDataset(X_va, y_va, lookback, horizon)
+    test_ds = WindowDataset(X_te, y_te, lookback, horizon)
+
+    train_dl = DataLoader(
+        train_ds,
+        batch_size=cfg["train"]["batch_size"],
+        shuffle=True,
+        num_workers=cfg["train"]["num_workers"],
+    )
+    val_dl = DataLoader(
+        val_ds,
+        batch_size=cfg["train"]["batch_size"],
+        shuffle=False,
+        num_workers=cfg["train"]["num_workers"],
+    )
+    test_dl = DataLoader(
+        test_ds,
+        batch_size=cfg["train"]["batch_size"],
+        shuffle=False,
+        num_workers=cfg["train"]["num_workers"],
+    )
+
+    n_features = X_all.shape[1]
+    mcfg = cfg["model"]
+    if mcfg["name"] == "lstm":
+        model = LSTMForecaster(
+            n_features, mcfg["hidden"], mcfg["layers"], mcfg["dropout"], horizon
+        ).to(device)
+    elif mcfg["name"] == "gru":
+        model = GRUForecaster(
+            n_features, mcfg["hidden"], mcfg["layers"], mcfg["dropout"], horizon
+        ).to(device)
+    else:
+        raise ValueError("model.name must be 'lstm' or 'gru'")
+
+    opt = torch.optim.AdamW(
+        model.parameters(),
+        lr=cfg["train"]["lr"],
+        weight_decay=cfg["train"]["weight_decay"],
+    )
+    loss_fn = torch.nn.MSELoss()
+
+    out_dir = cfg["output"]["checkpoints_dir"]
+    os.makedirs(out_dir, exist_ok=True)
+    best_path = os.path.join(out_dir, cfg["output"]["best_name"])
+
+    sel = cfg.get("selection", {"metric": "RMSE", "mode": "min"})
+    metric = sel.get("metric", "RMSE")
+    mode = sel.get("mode", "min").lower()
+
+    best_val = float("inf") if mode == "min" else -float("inf")
+    best_epoch = -1
+    best_metrics: dict[str, float] | None = None
+    for epoch in range(1, cfg["train"]["epochs"] + 1):
+        model.train()
+        total = 0.0
+        count = 0
+
+        for xb, yb in train_dl:
+            xb, yb = xb.to(device), yb.to(device)
+            opt.zero_grad(set_to_none=True)
+            pred = model(xb)
+            loss = loss_fn(pred, yb)
+            loss.backward()
+            opt.step()
+
+            total += loss.item() * xb.size(0)
+            count += xb.size(0)
+
+        train_mse = total / max(count, 1)
+        val_metrics = evaluate(model, val_dl, device, yscaler=yscaler)
+
+        if metric not in val_metrics:
+            raise KeyError(f"selection.metric='{metric}' not in val_metrics={list(val_metrics.keys())}")
+
+        val_score = val_metrics[metric]
+        better = (val_score < best_val) if mode == "min" else (val_score > best_val)
+
+        print(
+            f"epoch {epoch:02d} | train_mse={train_mse:.4f} | "
+            f"val_{metric}={val_score:.4f} | val_RMSE={val_metrics['RMSE']:.4f} | val_sMAPE={val_metrics['sMAPE']:.2f}"
+        )
+
+        if better:
+            best_val = val_score
+            best_epoch = epoch
+            best_metrics = val_metrics
+            torch.save(model.state_dict(), best_path)
+
+    model.load_state_dict(torch.load(best_path, map_location=device))
+    assert best_metrics is not None
+    print(
+        f"BEST @ epoch {best_epoch} | val_{metric}={best_val:.4f} | "
+        f"val_RMSE={best_metrics['RMSE']:.4f} | val_sMAPE={best_metrics['sMAPE']:.2f}"
+    )
+    test_metrics = evaluate(model, test_dl, device, yscaler=yscaler)
+    print(
+        f"TEST | RMSE={test_metrics['RMSE']:.4f} | "
+        f"MAE={test_metrics['MAE']:.4f} | sMAPE={test_metrics['sMAPE']:.2f}"
+    )
+
+
+if __name__ == "__main__":
+    import argparse
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--config", default="configs/opsd_lstm.yaml")
+    args = ap.parse_args()
+    main(args.config)
