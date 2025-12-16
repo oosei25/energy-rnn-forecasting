@@ -12,7 +12,7 @@ def seasonal_naive_windows(
     """
     Build (y_true, y_pred) windows on ORIGINAL SCALE for a split [start:end).
 
-    Window definition matches your WindowDataset on the split slice:
+    Window definition matches WindowDataset on the split slice:
       split_len = end-start
       n = split_len - lookback - horizon + 1
       for i in [0..n-1]:
