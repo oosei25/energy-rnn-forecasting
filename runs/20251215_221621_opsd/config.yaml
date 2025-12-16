@@ -1,0 +1,63 @@
+dataset: opsd
+
+opsd:
+  sqlite_path: data/raw/opsd_time_series/time_series.sqlite
+  table: time_series_60min_singleindex
+  timestamp_col: utc_timestamp
+
+  target: DE_LU_load_actual_entsoe_transparency
+  features:
+    - DE_LU_load_actual_entsoe_transparency
+    - DE_LU_solar_generation_actual
+    - DE_LU_wind_generation_actual
+    - DE_LU_wind_onshore_generation_actual
+    - DE_LU_wind_offshore_generation_actual
+    - DE_LU_price_day_ahead
+    - DE_LU_load_forecast_entsoe_transparency
+
+  # time slicing (ISO); leave null to use all available rows
+  start_utc: null
+  end_utc: null
+
+preprocess:
+  enforce_hourly_grid: true
+  impute: median_ffill_bfill
+  calendar_features: true
+  lags: [24, 168]   
+  target_mode: residual_over_lag
+  residual_lag: 168
+
+split:
+  train: 0.70
+  val: 0.15
+  test: 0.15
+
+window:
+  lookback: 168   # 7 days
+  horizon: 24     # 24 hours
+
+model:
+  name: lstm      # lstm 
+  hidden: 128
+  layers: 2
+  dropout: 0.1
+
+train:
+  batch_size: 256
+  epochs: 15
+  lr: 0.001
+  weight_decay: 0.0
+  seed: 42
+  num_workers: 0
+  patience: 5
+  min_delta: 0.0
+
+selection:
+  metric: RMSE   # RMSE | MAE | sMAPE
+  mode: min
+
+output:
+  checkpoints_dir: checkpoints
+  best_name: opsd_best.pt
+
+

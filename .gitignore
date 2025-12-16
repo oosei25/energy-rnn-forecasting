@@ -11,10 +11,10 @@ __pycache__/
 # Data (keep repo light)
 data/raw/**/time_series.sqlite
 data/raw/**/original_data.zip
-data/processed/
+#data/processed/
 
 # Training artifacts
 *.pt
-runs/
+#runs/
 logs/
 EOF

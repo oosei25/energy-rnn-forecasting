@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
@@ -42,6 +41,7 @@ def save_run_artifacts(
 
     write_results_md(run_dir, results)
 
+
 def _fmt(x, nd=2):
     try:
         return f"{float(x):.{nd}f}"
@@ -74,14 +74,18 @@ def write_results_md(run_dir: str, results: dict) -> None:
     base_test = baselines.get("test", {}) or {}
 
     # Convenience: baseline lag168 for improvement calc
-    lag168_test = (base_test.get("lag168") or {})
+    lag168_test = base_test.get("lag168") or {}
     rmse_lag168_test = lag168_test.get("RMSE")
     rmse_model_test = (model_test or {}).get("RMSE")
 
     improvement_rmse = None
     try:
         if rmse_lag168_test is not None and rmse_model_test is not None:
-            improvement_rmse = (float(rmse_lag168_test) - float(rmse_model_test)) / float(rmse_lag168_test) * 100.0
+            improvement_rmse = (
+                (float(rmse_lag168_test) - float(rmse_model_test))
+                / float(rmse_lag168_test)
+                * 100.0
+            )
     except Exception:
         improvement_rmse = None
 
@@ -92,15 +96,21 @@ def write_results_md(run_dir: str, results: dict) -> None:
     if ckpt_path:
         lines.append(f"- **Checkpoint:** `{ckpt_path}`")
     if selection:
-        lines.append(f"- **Selection:** metric=`{selection.get('metric','RMSE')}`, mode=`{selection.get('mode','min')}`")
+        lines.append(
+            f"- **Selection:** metric=`{selection.get('metric','RMSE')}`, mode=`{selection.get('mode','min')}`"
+        )
     if best.get("epoch") is not None:
         lines.append(f"- **Best epoch:** `{best.get('epoch')}`")
 
     # Key takeaway (recruiter-friendly)
     if improvement_rmse is not None:
         lines.append("")
-        lines.append("**Key takeaway:** The residual LSTM beats a strong seasonal-naive baseline (lag-168) on the test set.")
-        lines.append(f"- **Test RMSE improvement vs seasonal naive (lag-168):** `{improvement_rmse:.2f}%` (lower is better)")
+        lines.append(
+            "**Key takeaway:** The residual LSTM beats a strong seasonal-naive baseline (lag-168) on the test set."
+        )
+        lines.append(
+            f"- **Test RMSE improvement vs seasonal naive (lag-168):** `{improvement_rmse:.2f}%` (lower is better)"
+        )
 
     def add_table(title: str, model_m: dict | None, base: dict):
         lines.append(f"\n## {title}\n")
@@ -108,14 +118,18 @@ def write_results_md(run_dir: str, results: dict) -> None:
         lines.append("|---|---:|---:|---:|")
 
         if model_m:
-            lines.append(f"| **Neural net** | {_fmt(model_m.get('RMSE'))} | {_fmt(model_m.get('MAE'))} | {_fmt(model_m.get('sMAPE'))} |")
+            lines.append(
+                f"| **Neural net** | {_fmt(model_m.get('RMSE'))} | {_fmt(model_m.get('MAE'))} | {_fmt(model_m.get('sMAPE'))} |"
+            )
         else:
             lines.append("| **Neural net** | — | — | — |")
 
         for k in ("lag24", "lag168"):
             b = base.get(k)
             if b:
-                lines.append(f"| Baseline `{k}` | {_fmt(b.get('RMSE'))} | {_fmt(b.get('MAE'))} | {_fmt(b.get('sMAPE'))} |")
+                lines.append(
+                    f"| Baseline `{k}` | {_fmt(b.get('RMSE'))} | {_fmt(b.get('MAE'))} | {_fmt(b.get('sMAPE'))} |"
+                )
             else:
                 lines.append(f"| Baseline `{k}` | — | — | — |")
 

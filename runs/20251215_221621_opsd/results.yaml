@@ -1,0 +1,36 @@
+config_path: configs/opsd_lstm.yaml
+dataset: opsd
+selection:
+  metric: RMSE
+  mode: min
+best:
+  epoch: 2
+  val:
+    MAE: 2321.586382675805
+    RMSE: 3813.7371624634998
+    sMAPE: 4.293451035798981
+baselines:
+  val:
+    lag24:
+      RMSE: 7118.7716287776275
+      MAE: 4665.408258442266
+      sMAPE: 8.613727360704633
+    lag168:
+      RMSE: 3992.635487917325
+      MAE: 2295.2211102033407
+      sMAPE: 4.20655701429277
+  test:
+    lag24:
+      RMSE: 6182.093955229945
+      MAE: 4085.158230074437
+      sMAPE: 7.801819555203111
+    lag168:
+      RMSE: 4163.5751372615405
+      MAE: 2436.9751043936094
+      sMAPE: 4.625449339876554
+metrics:
+  test:
+    MAE: 2347.321178698213
+    RMSE: 3627.8406327720836
+    sMAPE: 4.560950108202811
+checkpoint_path: checkpoints/opsd_best.pt
