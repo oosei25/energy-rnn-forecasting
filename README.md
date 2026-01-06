@@ -114,7 +114,8 @@ The config points to the hourly table:
 
 - `time_series_60min_singleindex`
 
-> Tip: The original DB is huge, keep only the 60-min table (hourly) for repo-friendly size.
+> [!TIP] 
+> The original DB is huge, keep only the 60-min table (hourly) for repo-friendly size.
 
 ---
 
